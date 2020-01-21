@@ -1,5 +1,5 @@
 # sbx_select_coassembled_contigs
-This is an extension to the [Sunbeam metagenomics pipeline](https://github.com/sunbeam-labs/sunbeam) to extract, then overlap assemble (using CAP3), coassembled contigs with homology to sequences within a given BLAST database.
+This is an extension to the [Sunbeam metagenomics pipeline](https://github.com/sunbeam-labs/sunbeam) to extract, then overlap assemble (using CAP3), coassembled contigs with homology to sequences within a given BLAST database. Most of the code from this originates directly from [sbx_select_contigs](https://github.com/ArwaAbbas/sbx_select_contigs) by [ArwaAbbas](https://github.com/ArwaAbbas/).
 
 ## Install
 
