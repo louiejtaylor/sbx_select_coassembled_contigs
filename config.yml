@@ -1,0 +1,3 @@
+sbx_select_coassembled_contigs:
+  threads: 4
+  dbname: ''
