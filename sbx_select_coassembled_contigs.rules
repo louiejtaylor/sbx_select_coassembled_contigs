@@ -2,65 +2,84 @@
 
 HITS_FP = ASSEMBLY_FP/'selected_contigs'
 
-rule find_contigs:
+#ruleorder: blastn_coassembled > run_blastn
+
+rule blastn_coassembled:
     input:
+        contigs=str(ASSEMBLY_FP/'coassembly'/'{sample}_final_contigs.fa')
+    output:
+        str(ANNOTATION_FP/'blastn'/'{db}'/'{contigs}'/'{sample}.xml')
+    params:
+        db=lambda wildcard: Blastdbs['nucl'][wildcard.db] 
+    threads: 
+        Cfg['blast']['threads']
+    shell:
+        """
+        blastn \
+        -query {input.contigs} \
+        -db {params.db} \
+        -outfmt 5 \
+        -num_threads {threads} \
+        -evalue 1e-10 \
+        -max_target_seqs 5000 \
+        -out {output} \
+        """
+
+rule aggregate_results_coassembled:
+    input:
+        contigs=str(ASSEMBLY_FP/'coassembly'/'{sample}_final_contigs.fa'),
+        contig_results=expand(
+            str(ANNOTATION_FP/'blastn'/'{db}'/'contig'/'{{sample}}.xml'),
+            db=Blastdbs['nucl']),
+        gene_results=expand(
+            str(ANNOTATION_FP/'{blastpx}'/'{db}'/'{orf_finder}'/'{{sample}}.xml'),
+            blastpx=['blastp','blastx'],
+            db=Blastdbs['prot'],
+            orf_finder=['prodigal'])
+    output:
         str(ANNOTATION_FP/'summary'/'{sample}.tsv')
-    output:
-        temp(str(ANNOTATION_FP/'summary'/'{sample}_positive_contigs.txt'))
     params:
-        scriptdir = sunbeam_dir + '/extensions/sbx_select_contigs/find_contigs.R',
-        dbname = Cfg['sbx_select_contigs']['dbname']
-    conda:
-        "sbx_select_contigs_env.yml"
-    shell:
-        """
-        Rscript {params.scriptdir} {input} {params.dbname} {output}
-        """
+        dbs=list(Blastdbs['nucl'].keys()) + list(Blastdbs['prot'].keys())
+    run:
+        contigs = {r.id: r.seq for r in SeqIO.parse(input.contigs, 'fasta')}
+        # Separate each set of result files by the database it was blasted against
+        contig_results = {
+            db: blast_contig_summary(f for f in input.contig_results if db in f)
+            for db in Blastdbs['nucl']
+        }
+        # We only care about the number of hits for the protein database
+        gene_hits = {
+            db: blast_hits(f for f in input.gene_results if db in f)
+            for db in Blastdbs['prot']
+        }
+        with open(output[0], 'w') as out:
+            writer = csv.DictWriter(
+                out,
+                fieldnames=['sample', 'contig', 'length', 'circular'] + params.dbs,
+                delimiter='\t')
+            writer.writeheader()
+            for contig, contig_seq in contigs.items():
+                is_circular = circular(
+                    contig_seq,
+                    Cfg['annotation']['circular_kmin'],
+                    Cfg['annotation']['circular_kmax'],
+                    Cfg['annotation']['circular_min_len'])
+                results = {
+                    'sample':wildcards.sample,
+                    'contig':contig,
+                    'length':len(contig_seq),
+                    'circular':is_circular
+                }
+                for db in Blastdbs['nucl']:                
+                    results[db] = contig_results[db].get(contig, "NA")
+                # Report the number of hits of each contig/gene for each prot. db
+                # Genes are reported from prodigal as contig_1,contig_2, etc so
+                # aggregate all hits for all of a contig's genes together using sum
+                for db in Blastdbs['prot']:
+                    results[db] = sum(
+                        gene_hits[db][gene] for gene in gene_hits[db] if contig in gene)
+                writer.writerow(results)
 
-rule select_contigs:
+rule select_all_coassembled:
     input:
-        con = str(ASSEMBLY_FP/'contigs'/'{sample}-contigs.fa'),
-        pos = str(ANNOTATION_FP/'summary'/'{sample}_positive_contigs.txt')
-    output:
-        temp(str(HITS_FP/'{sample}_positive_contigs.fa'))
-    params:
-        scriptdir = sunbeam_dir + '/extensions/sbx_select_contigs/select_contigs.R'
-    conda:
-        "sbx_select_contigs_env.yml"
-    shell:
-        """
-        Rscript {params.scriptdir} {input.con} {input.pos} {output}
-        """
-
-rule combine_contigs:
-    input:
-        str(HITS_FP/'{sample}_positive_contigs.fa')
-    output:
-        str(HITS_FP/'combined'/'{sample}_positive_contigs_final.fa')
-    log:
-        str(HITS_FP/'cap3'/'{sample}.out')
-    params:
-        links = str(HITS_FP/'{sample}_positive_contigs.fa.cap.contigs.links'),
-        info = str(HITS_FP/'{sample}_positive_contigs.fa.cap.info'),
-        qual = str(HITS_FP/'{sample}_positive_contigs.fa.cap.contigs.qual'),
-	ace = str(HITS_FP/'{sample}_positive_contigs.fa.cap.ace'),
-	cap3dir = str(HITS_FP/'cap3/')
-    conda:
-        "sbx_select_contigs_env.yml"
-    shell:
-        """
-        [[ -s {input} ]] && \
-        cap3 {input} &> {log} && \
-        cat {input}.cap.singlets {input}.cap.contigs > {output} || \
-	cp {input} {output} &> {log}
-	mv {params.info} {params.cap3dir}
-        mv {params.qual} {params.cap3dir}
-        mv {params.ace} {params.cap3dir}
-        mv {params.links} {params.cap3dir}
-        mv {input}.cap.singlets {params.cap3dir}
-	mv {input}.cap.contigs {params.cap3dir}
-	"""
-
-rule select_all:
-    input:
-        expand(str(HITS_FP/'combined'/'{sample}_positive_contigs_final.fa'),sample = Samples.keys())
+        expand(str(HITS_FP/'combined'/'{sample}_positive_contigs_final.fa'), sample = list(set(coassembly_groups(Cfg['sbx_coassembly']['group_file'],Samples.keys())[0])))
